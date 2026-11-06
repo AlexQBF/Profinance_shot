@@ -1,13 +1,7 @@
 """
-Открывает главную profinance.ru, делает скриншот и отправляет его в Telegram.
+Открывает https://www.profinance.ru/gold/, делает скриншот и отправляет его в Telegram.
 Запускается из GitHub Actions (.github/workflows/screenshot.yml).
 
-Переменные окружения:
-  TELEGRAM_BOT_TOKEN — токен бота
-  CHAT_ID            — куда отправить скриншот
-  MODE               — shot (экран) или full (вся страница)
-  PAGE_URL           — адрес страницы (по умолчанию https://www.profinance.ru/)
-  VIEWPORT           — размер окна, например 1440x900
 """
 
 import os
@@ -21,8 +15,15 @@ from playwright.sync_api import sync_playwright
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 MODE = os.environ.get("MODE", "shot").strip().lower()
-PAGE_URL = os.environ.get("PAGE_URL") or "https://www.profinance.ru/"
-VW, VH = (int(v) for v in (os.environ.get("VIEWPORT") or "1440x900").lower().split("x"))
+PAGE_URL = "https://www.profinance.ru/gold/"
+# Ширина окна браузера: чем больше, тем мельче выглядит страница (как уменьшение масштаба)
+VW, VH = 1600, 1000
+
+# Кадр для /shot: от шапки ProFinance до строки таблицы с этим названием (включительно).
+# Чтобы захватить все таблицы ниже — поставьте "PAXG/USDT".
+CLIP_UNTIL = "Palladium"
+# Чёткость картинки (1 — обычная, 2 — как на Retina)
+SCALE = 1.25
 
 API = f"https://api.telegram.org/bot{TOKEN}"
 
@@ -84,10 +85,45 @@ def close_cookie_banner(page) -> None:
     page.wait_for_timeout(300)
 
 
+FIND_CLIP_JS = """(untilText) => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    const all = [...document.querySelectorAll('body *')];
+    const leaf = (t) => all.filter((el) => vis(el) && el.children.length === 0
+                                     && (el.textContent || '').trim() === t);
+    const wideAncestor = (el, share) => {
+        let n = el;
+        while (n && n !== document.body) {
+            if (n.getBoundingClientRect().width >= innerWidth * share) return n;
+            n = n.parentElement;
+        }
+        return null;
+    };
+
+    // шапка: строка меню с пунктом «Markets» (или логотип ProFinance)
+    const anchor = leaf('Markets')[0] || leaf('ProFinance')[0];
+    if (!anchor) return null;
+    const bar = wideAncestor(anchor, 0.6);
+    if (!bar) return null;
+    const b = bar.getBoundingClientRect();
+    const top = b.top + scrollY;
+
+    // низ: строка таблицы с нужным названием
+    const cell = leaf(untilText).find((el) => el.getBoundingClientRect().top + scrollY > top + 200);
+    if (!cell) return null;
+    const row = cell.closest('tr') || wideAncestor(cell, 0.4) || cell;
+    const bottom = row.getBoundingClientRect().bottom + scrollY;
+
+    const x = Math.max(0, b.left + scrollX);
+    const right = Math.min(document.documentElement.scrollWidth, b.right + scrollX);
+    return { x, y: Math.max(0, top - 4), width: right - x, height: bottom - top + 16 };
+}"""
+
+
 def take_screenshot(full_page: bool) -> bytes:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(
+            device_scale_factor=SCALE,
             viewport={"width": VW, "height": VH},
             locale="ru-RU",
             timezone_id="Europe/Moscow",
@@ -102,9 +138,18 @@ def take_screenshot(full_page: bool) -> bytes:
             page.wait_for_load_state("networkidle", timeout=15_000)
         except Exception:
             pass  # страница с живыми котировками может не «успокоиться» — это нормально
-        page.wait_for_timeout(3_000)
+        # прокрутить вниз и обратно, чтобы подгрузились график и таблицы
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(1_500)
+        page.evaluate("window.scrollTo(0, 0)")
+        page.wait_for_timeout(4_000)
         close_cookie_banner(page)
-        png = page.screenshot(full_page=full_page, type="png")
+
+        clip = None if full_page else page.evaluate(FIND_CLIP_JS, CLIP_UNTIL)
+        if clip and clip["width"] > 100 and clip["height"] > 100:
+            png = page.screenshot(full_page=True, clip=clip, type="png")
+        else:
+            png = page.screenshot(full_page=full_page, type="png")
         browser.close()
         return png
 
@@ -122,7 +167,7 @@ def main() -> None:
         raise
 
     now = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M")
-    caption = f"profinance.ru · {now} МСК"
+    caption = f"profinance.ru/gold · {now} МСК"
     files_field = "document" if full_page else "photo"  # длинную страницу Telegram сожмёт как фото
     method = "sendDocument" if full_page else "sendPhoto"
     r = requests.post(
