@@ -16,6 +16,7 @@ from playwright.sync_api import sync_playwright
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 MODE = os.environ.get("MODE", "shot").strip().lower()
+WAIT_MSG_ID = os.environ.get("WAIT_MSG_ID", "").strip()  # сообщение «Делаю скриншот…», удалим после отправки
 
 PAGE_URL = "https://www.profinance.ru/gold/"
 VW, VH = 1400, 1000      # размер окна браузера
@@ -169,11 +170,21 @@ def send_text(text: str) -> None:
     requests.post(f"{API}/sendMessage", data={"chat_id": CHAT_ID, "text": text}, timeout=30)
 
 
+def delete_wait_message() -> None:
+    if WAIT_MSG_ID.isdigit():
+        try:
+            requests.post(f"{API}/deleteMessage",
+                          data={"chat_id": CHAT_ID, "message_id": WAIT_MSG_ID}, timeout=15)
+        except Exception:
+            pass
+
+
 def main() -> None:
     full_page = MODE == "full"
     try:
         png = take_screenshot(full_page)
     except Exception as e:
+        delete_wait_message()
         send_text(f"Не получилось сделать скриншот: {e}")
         raise
 
@@ -190,6 +201,7 @@ def main() -> None:
         print(r.text, file=sys.stderr)
         r.raise_for_status()
     log("отправлено в Telegram")
+    delete_wait_message()
 
 
 if __name__ == "__main__":
