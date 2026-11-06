@@ -49,6 +49,10 @@ def log(msg: str) -> None:
     print(f"[{time.time() - T0:5.1f}s] {msg}", flush=True)
 
 
+TABLE_READY_JS = """() => [...document.querySelectorAll('tr')].some(
+    (tr) => /Palladium/.test(tr.innerText || '') && /\\d/.test(tr.innerText || ''))"""
+
+
 HIDE_COOKIE_AND_FIXED_JS = """() => {
     // согласиться с cookie, если есть кнопка
     for (const el of document.querySelectorAll('button, a, div, span')) {
@@ -147,13 +151,19 @@ def take_screenshot(full_page: bool) -> bytes:
                 else route.continue_(),
             )
 
-        page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45_000)
-        log("страница открыта")
-        # ждём, пока появятся цены в таблице, а потом немного — чтобы дорисовался график
-        try:
-            page.get_by_text("Palladium", exact=True).first.wait_for(timeout=15_000)
-        except Exception:
-            log("таблица не появилась за 15 с")
+        # ждём, пока таблица цен заполнится цифрами; если нет — перезагружаем страницу
+        for attempt in range(1, 4):
+            if attempt == 1:
+                page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45_000)
+            else:
+                log(f"таблица не загрузилась, перезагружаю (попытка {attempt})")
+                page.reload(wait_until="domcontentloaded", timeout=45_000)
+            log("страница открыта")
+            try:
+                page.wait_for_function(TABLE_READY_JS, timeout=15_000, polling=300)
+                break
+            except Exception:
+                pass
         try:
             page.wait_for_load_state("networkidle", timeout=4_000)
         except Exception:
