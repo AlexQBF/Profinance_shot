@@ -14,7 +14,7 @@ on:
         default: shot
 
 concurrency:
-  group: screenshot
+  group: screenshot-${{ github.event.client_payload.chat_id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
