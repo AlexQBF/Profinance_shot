@@ -33,7 +33,7 @@ const WELCOME =
   `Нажми ${BTN_SHOT}, пришлю график и таблицу цен\n\n` +
   "Картинка приходит примерно через 10 секунд";
 
-const COOLDOWN_MS = 10_000; // не чаще раза в 10 секунд на человека
+const COOLDOWN_MS = 20_000; // не чаще раза в 20 секунд на человека
 const lastRequest = new Map();
 
 export default {
@@ -167,7 +167,12 @@ async function takeScreenshot(env) {
       .waitForFunction(tableReady, { timeout: 12_000, polling: 300 })
       .then(() => true, () => false);
     if (!ok) throw new Error("таблица цен не загрузилась за 12 с");
-    await new Promise((r) => setTimeout(r, 1500));
+    // ждём, пока нарисуется график
+    const chartOk = await page
+      .waitForFunction(chartReady, { timeout: 8_000, polling: 300 })
+      .then(() => true, () => false);
+    if (!chartOk) throw new Error("график не загрузился за 8 с");
+    await new Promise((r) => setTimeout(r, 700));
 
     await page.evaluate(hideCookieAndFixed);
     await new Promise((r) => setTimeout(r, 200));
@@ -190,6 +195,38 @@ function tableReady() {
   return [...document.querySelectorAll("tr")].some(
     (tr) => /Palladium/.test(tr.innerText || "") && /\d/.test(tr.innerText || "")
   );
+}
+
+function chartReady() {
+  const sel = [...document.querySelectorAll("select")].find((s) =>
+    [...s.options].some((o) => (o.text || "").trim() === "1Min")) ||
+    [...document.querySelectorAll("body *")].find((el) =>
+      el.children.length === 0 && (el.textContent || "").trim() === "1Min");
+  let box = sel;
+  while (box && box.getBoundingClientRect().height < 400) box = box.parentElement;
+  if (!box) return true; // не нашли блок графика — не ждём
+  const els = [...box.querySelectorAll("canvas, img, svg, iframe")].filter((e) => {
+    const r = e.getBoundingClientRect();
+    return r.width > 300 && r.height > 200;
+  });
+  for (const e of els) {
+    if (e.tagName === "IMG") { if (e.complete && e.naturalWidth > 0) return true; continue; }
+    if (e.tagName === "CANVAS") {
+      try {
+        const ctx = e.getContext("2d");
+        if (!ctx) return true;
+        const d = ctx.getImageData(0, 0, e.width, e.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4 * 97) {
+          if (d[i + 3] > 0 && (d[i] < 200 || d[i + 1] < 200 || d[i + 2] < 200)) n++;
+          if (n > 50) return true;
+        }
+      } catch (err) { return true; }
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 function hideCookieAndFixed() {
