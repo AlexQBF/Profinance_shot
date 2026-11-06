@@ -1,0 +1,45 @@
+name: Загрузить Worker в Cloudflare
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare/**"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Загрузить код и секреты в Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          wranglerVersion: "4"
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare
+          secrets: |
+            TELEGRAM_BOT_TOKEN
+            GITHUB_TOKEN
+            WEBHOOK_SECRET
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+
+      - name: Связать Telegram-бота с Worker'ом
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          WORKER_URL: https://profinance-shot.khoroshilov-aleksey.workers.dev
+        run: |
+          curl -sS --fail-with-body "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+            --data-urlencode "url=${WORKER_URL}" \
+            --data-urlencode "secret_token=${WEBHOOK_SECRET}" \
+            --data-urlencode 'allowed_updates=["message"]'
+          echo
+          curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo" \
+            | sed -E 's/bot[0-9]+:[A-Za-z0-9_-]+/bot***/g'
