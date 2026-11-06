@@ -161,10 +161,12 @@ async function takeScreenshot(env) {
     });
 
     await page.goto(PAGE_URL, { waitUntil: "domcontentloaded", timeout: 20_000 });
-    // ждём таблицу цен, потом немного — чтобы дорисовался график
-    await page
-      .waitForFunction(() => document.body && document.body.innerText.includes("Palladium"), { timeout: 10_000 })
-      .catch(() => {});
+    // ждём, пока таблица цен заполнится цифрами; если не дождались — не шлём
+    // неполную картинку, а отдаём задачу запасному пути (GitHub)
+    const ok = await page
+      .waitForFunction(tableReady, { timeout: 12_000, polling: 300 })
+      .then(() => true, () => false);
+    if (!ok) throw new Error("таблица цен не загрузилась за 12 с");
     await new Promise((r) => setTimeout(r, 1500));
 
     await page.evaluate(hideCookieAndFixed);
@@ -183,6 +185,12 @@ async function takeScreenshot(env) {
 }
 
 // --- выполняется внутри страницы ---
+
+function tableReady() {
+  return [...document.querySelectorAll("tr")].some(
+    (tr) => /Palladium/.test(tr.innerText || "") && /\d/.test(tr.innerText || "")
+  );
+}
 
 function hideCookieAndFixed() {
   for (const el of document.querySelectorAll("button, a, div, span")) {
