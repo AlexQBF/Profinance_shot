@@ -110,9 +110,6 @@ async function takeScreenshot(env) {
   try {
     const page = await browser.newPage();
     await page.setViewport(VIEWPORT);
-    // московское время и русский язык на странице (если не получится — не страшно)
-    try { await page.emulateTimezone("Europe/Moscow"); } catch (e) { console.log("tz:", String(e)); }
-    try { await page.setExtraHTTPHeaders({ "Accept-Language": "ru-RU,ru;q=0.9" }); } catch (e) {}
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const url = req.url();
