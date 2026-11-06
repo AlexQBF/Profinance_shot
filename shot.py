@@ -3,6 +3,7 @@
 Запускается из GitHub Actions (.github/workflows/screenshot.yml).
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -34,6 +35,13 @@ AD_HOSTS = (
 )
 
 API = f"https://api.telegram.org/bot{TOKEN}"
+
+# Кнопка под полем ввода — прикладываем к каждому сообщению, иначе Telegram её прячет
+KEYBOARD = json.dumps({
+    "keyboard": [[{"text": "📸 Скриншот"}]],
+    "resize_keyboard": True,
+    "is_persistent": True,
+})
 T0 = time.time()
 
 
@@ -167,7 +175,7 @@ def take_screenshot(full_page: bool) -> bytes:
 
 
 def send_text(text: str) -> None:
-    requests.post(f"{API}/sendMessage", data={"chat_id": CHAT_ID, "text": text}, timeout=30)
+    requests.post(f"{API}/sendMessage", data={"chat_id": CHAT_ID, "text": text, "reply_markup": KEYBOARD}, timeout=30)
 
 
 def delete_wait_message() -> None:
@@ -193,7 +201,7 @@ def main() -> None:
     method, field = ("sendDocument", "document") if full_page else ("sendPhoto", "photo")
     r = requests.post(
         f"{API}/{method}",
-        data={"chat_id": CHAT_ID, "caption": caption},
+        data={"chat_id": CHAT_ID, "caption": caption, "reply_markup": KEYBOARD},
         files={field: ("profinance.png", png, "image/png")},
         timeout=60,
     )
