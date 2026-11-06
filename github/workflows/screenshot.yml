@@ -1,0 +1,44 @@
+name: Скриншот profinance
+
+on:
+  # вызов из Telegram через Cloudflare Worker
+  repository_dispatch:
+    types: [shot, full]
+  # ручной запуск кнопкой «Run workflow» (на случай проверки)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "shot — экран, full — вся страница"
+        type: choice
+        options: [shot, full]
+        default: shot
+
+concurrency:
+  group: screenshot
+  cancel-in-progress: false
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Установить зависимости
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Сделать скриншот и отправить в Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id || secrets.TELEGRAM_CHAT_ID }}
+          MODE: ${{ github.event.action || github.event.inputs.mode || 'shot' }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+          VIEWPORT: ${{ vars.VIEWPORT }}
+        run: python shot.py
