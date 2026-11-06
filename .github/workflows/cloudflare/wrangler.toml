@@ -1,0 +1,8 @@
+name = "profinance-shot"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+[vars]
+GITHUB_REPO = "AlexQBF/Profinance_shot"
+ALLOWED_CHAT_IDS = "171859933"
