@@ -63,6 +63,10 @@ export default {
       }
       lastRequest.set(chatId, now);
 
+      // сначала сообщение «Делаю…» — его id передаём в GitHub, чтобы потом удалить
+      const wait = await sendMessage(env, chatId, "⏳ Делаю скриншот, пришлю примерно через 20-30 секунд…");
+      const waitId = wait?.result?.message_id ?? null;
+
       const res = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, {
         method: "POST",
         headers: {
@@ -71,14 +75,16 @@ export default {
           "X-GitHub-Api-Version": "2022-11-28",
           "User-Agent": "profinance-shot-worker",
         },
-        body: JSON.stringify({ event_type: "shot", client_payload: { chat_id: chatId } }),
+        body: JSON.stringify({
+          event_type: "shot",
+          client_payload: { chat_id: chatId, wait_message_id: waitId },
+        }),
       });
 
-      if (res.ok) {
-        await sendMessage(env, chatId, "⏳ Делаю скриншот, пришлю примерно через 20-30 секунд…");
-      } else {
+      if (!res.ok) {
         lastRequest.delete(chatId);
         console.log("GitHub dispatch failed", res.status, await res.text());
+        if (waitId) await deleteMessage(env, chatId, waitId);
         await sendMessage(env, chatId, "Не получилось запустить скриншот, попробуйте позже.");
       }
     } else {
@@ -91,9 +97,22 @@ export default {
 };
 
 async function sendMessage(env, chatId, text) {
-  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, reply_markup: KEYBOARD }),
+  });
+  try {
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+async function deleteMessage(env, chatId, messageId) {
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
   });
 }
