@@ -1,7 +1,12 @@
 name = "profinance-shot"
 main = "worker.js"
-compatibility_date = "2025-06-01"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
+
+# браузер Cloudflare для скриншотов
+[browser]
+binding = "BROWSER"
 
 [vars]
 GITHUB_REPO = "AlexQBF/Profinance_shot"
