@@ -1,11 +1,12 @@
 """
 Открывает https://www.profinance.ru/gold/, делает скриншот и отправляет его в Telegram.
 Запускается из GitHub Actions (.github/workflows/screenshot.yml).
-
 """
 
 import os
+import subprocess
 import sys
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -15,113 +16,110 @@ from playwright.sync_api import sync_playwright
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 MODE = os.environ.get("MODE", "shot").strip().lower()
+
 PAGE_URL = "https://www.profinance.ru/gold/"
-# Ширина окна браузера: чем больше, тем мельче выглядит страница (как уменьшение масштаба)
-VW, VH = 1600, 1000
+VW, VH = 1400, 1000      # размер окна браузера
+SCALE = 1.5              # чёткость: 1 — обычная, 2 — как на Retina
+BLOCK_ADS = True         # не загружать рекламу: быстрее и чище картинка
 
-# Кадр для /shot: от шапки ProFinance до строки таблицы с этим названием (включительно).
-# Чтобы захватить все таблицы ниже — поставьте "PAXG/USDT".
-CLIP_UNTIL = "Palladium"
-# Чёткость картинки (1 — обычная, 2 — как на Retina)
-SCALE = 1.25
+# Где заканчивается кадр (первое найденное сверху вниз):
+END_MARKERS = ["Получить онлайн цены", "PAXG/USDT", "Palladium"]
 
-API = f"https://api.telegram.org/bot{TOKEN}"
-
-
-COOKIE_WORDS = ("cookie", "куки", "файлы cookie", "персональных данных")
-ACCEPT_TEXTS = (
-    "Принять", "Принимаю", "Согласен", "Согласна", "Согласиться", "Я согласен",
-    "Хорошо", "Понятно", "Ок", "OK", "Accept", "Accept all", "Got it", "Закрыть",
+AD_HOSTS = (
+    "an.yandex.ru", "yandex.ru/ads", "yastatic.net/partner", "adfox", "mc.yandex",
+    "googlesyndication", "doubleclick", "googletagmanager", "google-analytics",
+    "top-fwz1.mail.ru", "mail.ru/counter", "ad.mail.ru", "adriver", "criteo",
+    "smi2", "relap", "mediametrics", "24smi", "yadro.ru", "liveinternet",
 )
 
+API = f"https://api.telegram.org/bot{TOKEN}"
+T0 = time.time()
 
-def close_cookie_banner(page) -> None:
-    """Соглашается с cookie-баннером, а если не вышло — прячет его."""
-    # 1. Нажать кнопку согласия рядом с текстом про cookie
-    for frame in page.frames:
-        for text in ACCEPT_TEXTS:
-            try:
-                btn = frame.get_by_role("button", name=text, exact=True)
-                if btn.count() == 0:
-                    btn = frame.locator(
-                        f"a:text-is('{text}'), div:text-is('{text}'), span:text-is('{text}')"
-                    )
-                for i in range(btn.count()):
-                    el = btn.nth(i)
-                    if not el.is_visible():
-                        continue
-                    # кнопка должна быть в блоке, где говорится про cookie
-                    near = el.evaluate(
-                        """(el) => {
-                            let n = el;
-                            for (let k = 0; k < 6 && n; k++, n = n.parentElement) {
-                                const t = (n.innerText || '').toLowerCase();
-                                if (t.includes('cookie') || t.includes('куки')) return true;
-                            }
-                            return false;
-                        }"""
-                    )
-                    if near:
-                        el.click(timeout=3_000)
-                        page.wait_for_timeout(700)
-                        return
-            except Exception:
-                continue
 
-    # 2. Запасной вариант: спрятать закреплённые блоки, где упоминаются cookie
-    page.evaluate(
-        """(words) => {
-            for (const el of document.querySelectorAll('body *')) {
-                const st = getComputedStyle(el);
-                if (st.position !== 'fixed' && st.position !== 'sticky') continue;
-                const t = (el.innerText || '').toLowerCase();
-                if (t.length < 2000 && words.some(w => t.includes(w))) {
-                    el.style.setProperty('display', 'none', 'important');
-                }
+def log(msg: str) -> None:
+    print(f"[{time.time() - T0:5.1f}s] {msg}", flush=True)
+
+
+HIDE_COOKIE_AND_FIXED_JS = """() => {
+    // согласиться с cookie, если есть кнопка
+    for (const el of document.querySelectorAll('button, a, div, span')) {
+        const t = (el.textContent || '').trim();
+        if (t === 'Я согласен' || t === 'Согласен' || t === 'Принять') {
+            let n = el, near = false;
+            for (let k = 0; k < 6 && n; k++, n = n.parentElement) {
+                const s = (n.innerText || '').toLowerCase();
+                if (s.includes('cookie') || s.includes('куки')) { near = true; break; }
             }
-        }""",
-        list(COOKIE_WORDS),
-    )
-    page.wait_for_timeout(300)
-
-
-FIND_CLIP_JS = """(untilText) => {
-    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-    const all = [...document.querySelectorAll('body *')];
-    const leaf = (t) => all.filter((el) => vis(el) && el.children.length === 0
-                                     && (el.textContent || '').trim() === t);
-    const wideAncestor = (el, share) => {
-        let n = el;
-        while (n && n !== document.body) {
-            if (n.getBoundingClientRect().width >= innerWidth * share) return n;
-            n = n.parentElement;
+            if (near) { try { el.click(); } catch (e) {} }
         }
-        return null;
-    };
-
-    // шапка: строка меню с пунктом «Markets» (или логотип ProFinance)
-    const anchor = leaf('Markets')[0] || leaf('ProFinance')[0];
-    if (!anchor) return null;
-    const bar = wideAncestor(anchor, 0.6);
-    if (!bar) return null;
-    const b = bar.getBoundingClientRect();
-    const top = b.top + scrollY;
-
-    // низ: строка таблицы с нужным названием
-    const cell = leaf(untilText).find((el) => el.getBoundingClientRect().top + scrollY > top + 200);
-    if (!cell) return null;
-    const row = cell.closest('tr') || wideAncestor(cell, 0.4) || cell;
-    const bottom = row.getBoundingClientRect().bottom + scrollY;
-
-    const x = Math.max(0, b.left + scrollX);
-    const right = Math.min(document.documentElement.scrollWidth, b.right + scrollX);
-    return { x, y: Math.max(0, top - 4), width: right - x, height: bottom - top + 16 };
+    }
+    // убрать всё «прилипающее» к экрану (cookie-плашка, нижние рекламные полосы),
+    // кроме шапки сайта с меню
+    for (const el of document.querySelectorAll('body *')) {
+        const st = getComputedStyle(el);
+        if (st.position !== 'fixed' && st.position !== 'sticky') continue;
+        if ((el.innerText || '').includes('Markets')) { el.style.position = 'static'; continue; }
+        el.style.setProperty('display', 'none', 'important');
+    }
 }"""
+
+
+FIND_CLIP_JS = """(endMarkers) => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    const all = [...document.querySelectorAll('body *')].filter(vis);
+    const leaf = (t) => all.filter((el) => el.children.length === 0 && (el.textContent || '').trim() === t);
+    const R = (el) => { const r = el.getBoundingClientRect();
+        return { left: r.left + scrollX, right: r.right + scrollX, top: r.top + scrollY, bottom: r.bottom + scrollY }; };
+
+    // таблица с ценами — по строке «Gold»
+    const goldCells = leaf('Gold').filter((el) => el.closest('tr'));
+    const priceTable = goldCells.length ? goldCells[goldCells.length - 1].closest('table') : null;
+    if (!priceTable) return null;
+    const tbl = R(priceTable);
+
+    // шапка: поднимаемся от пункта меню «Markets», пока блок не дотянется до левого края контента
+    const anchor = leaf('Markets')[0];
+    if (!anchor) return null;
+    let header = anchor;
+    while (header.parentElement && header !== document.body && R(header).left > tbl.left + 4) {
+        header = header.parentElement;
+    }
+    const hdr = R(header);
+
+    // низ кадра
+    let bottom = null;
+    for (const m of endMarkers) {
+        const cands = all.filter((el) => (el.innerText || '').trim().startsWith(m) && R(el).top > tbl.top);
+        if (cands.length) {
+            cands.sort((a, b) => R(a).bottom - R(b).bottom);   // самый маленький блок
+            const el = cands[0].closest('tr') || cands[0];
+            bottom = R(el).bottom;
+            break;
+        }
+    }
+    if (bottom === null) bottom = tbl.bottom;
+
+    const x = Math.max(0, Math.min(hdr.left, tbl.left) - 6);
+    const right = Math.min(document.documentElement.scrollWidth, Math.max(hdr.right, tbl.right) + 6);
+    const y = Math.max(0, hdr.top);
+    return { x, y, width: right - x, height: bottom - y + 12 };
+}"""
+
+
+def launch(p):
+    # Google Chrome уже установлен на машинах GitHub — не тратим время на скачивание
+    try:
+        return p.chromium.launch(channel="chrome", headless=True)
+    except Exception:
+        log("Chrome не найден, ставлю Chromium")
+        subprocess.run([sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"], check=True)
+        return p.chromium.launch(headless=True)
 
 
 def take_screenshot(full_page: bool) -> bytes:
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = launch(p)
+        log("браузер запущен")
         page = browser.new_page(
             device_scale_factor=SCALE,
             viewport={"width": VW, "height": VH},
@@ -132,25 +130,38 @@ def take_screenshot(full_page: bool) -> bytes:
                 "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
             ),
         )
-        page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=60_000)
-        # даём подгрузиться котировкам и графикам
-        try:
-            page.wait_for_load_state("networkidle", timeout=15_000)
-        except Exception:
-            pass  # страница с живыми котировками может не «успокоиться» — это нормально
-        # прокрутить вниз и обратно, чтобы подгрузились график и таблицы
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(1_500)
-        page.evaluate("window.scrollTo(0, 0)")
-        page.wait_for_timeout(4_000)
-        close_cookie_banner(page)
+        if BLOCK_ADS:
+            page.route(
+                "**/*",
+                lambda route: route.abort()
+                if any(h in route.request.url for h in AD_HOSTS)
+                else route.continue_(),
+            )
 
-        clip = None if full_page else page.evaluate(FIND_CLIP_JS, CLIP_UNTIL)
-        if clip and clip["width"] > 100 and clip["height"] > 100:
+        page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45_000)
+        log("страница открыта")
+        # ждём, пока появятся цены в таблице, а потом немного — чтобы дорисовался график
+        try:
+            page.get_by_text("Palladium", exact=True).first.wait_for(timeout=15_000)
+        except Exception:
+            log("таблица не появилась за 15 с")
+        try:
+            page.wait_for_load_state("networkidle", timeout=4_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1_500)
+        page.evaluate(HIDE_COOKIE_AND_FIXED_JS)
+        page.wait_for_timeout(300)
+        log("страница готова")
+
+        clip = None if full_page else page.evaluate(FIND_CLIP_JS, END_MARKERS)
+        log(f"кадр: {clip}")
+        if clip and clip["width"] > 200 and clip["height"] > 200:
             png = page.screenshot(full_page=True, clip=clip, type="png")
         else:
             png = page.screenshot(full_page=full_page, type="png")
         browser.close()
+        log("скриншот сделан")
         return png
 
 
@@ -168,17 +179,17 @@ def main() -> None:
 
     now = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M")
     caption = f"profinance.ru/gold · {now} МСК"
-    files_field = "document" if full_page else "photo"  # длинную страницу Telegram сожмёт как фото
-    method = "sendDocument" if full_page else "sendPhoto"
+    method, field = ("sendDocument", "document") if full_page else ("sendPhoto", "photo")
     r = requests.post(
         f"{API}/{method}",
         data={"chat_id": CHAT_ID, "caption": caption},
-        files={files_field: ("profinance.png", png, "image/png")},
+        files={field: ("profinance.png", png, "image/png")},
         timeout=60,
     )
     if not r.ok:
         print(r.text, file=sys.stderr)
         r.raise_for_status()
+    log("отправлено в Telegram")
 
 
 if __name__ == "__main__":
