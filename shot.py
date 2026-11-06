@@ -53,6 +53,39 @@ TABLE_READY_JS = """() => [...document.querySelectorAll('tr')].some(
     (tr) => /Palladium/.test(tr.innerText || '') && /\\d/.test(tr.innerText || ''))"""
 
 
+CHART_READY_JS = """() => (function chartReady() {
+  const sel = [...document.querySelectorAll("select")].find((s) =>
+    [...s.options].some((o) => (o.text || "").trim() === "1Min")) ||
+    [...document.querySelectorAll("body *")].find((el) =>
+      el.children.length === 0 && (el.textContent || "").trim() === "1Min");
+  let box = sel;
+  while (box && box.getBoundingClientRect().height < 400) box = box.parentElement;
+  if (!box) return true; // не нашли блок графика — не ждём
+  const els = [...box.querySelectorAll("canvas, img, svg, iframe")].filter((e) => {
+    const r = e.getBoundingClientRect();
+    return r.width > 300 && r.height > 200;
+  });
+  for (const e of els) {
+    if (e.tagName === "IMG") { if (e.complete && e.naturalWidth > 0) return true; continue; }
+    if (e.tagName === "CANVAS") {
+      try {
+        const ctx = e.getContext("2d");
+        if (!ctx) return true;
+        const d = ctx.getImageData(0, 0, e.width, e.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4 * 97) {
+          if (d[i + 3] > 0 && (d[i] < 200 || d[i + 1] < 200 || d[i + 2] < 200)) n++;
+          if (n > 50) return true;
+        }
+      } catch (err) { return true; }
+      continue;
+    }
+    return true;
+  }
+  return false;
+})()"""
+
+
 HIDE_COOKIE_AND_FIXED_JS = """() => {
     // согласиться с cookie, если есть кнопка
     for (const el of document.querySelectorAll('button, a, div, span')) {
@@ -161,6 +194,7 @@ def take_screenshot(full_page: bool) -> bytes:
             log("страница открыта")
             try:
                 page.wait_for_function(TABLE_READY_JS, timeout=15_000, polling=300)
+                page.wait_for_function(CHART_READY_JS, timeout=10_000, polling=300)
                 break
             except Exception:
                 pass
@@ -168,7 +202,7 @@ def take_screenshot(full_page: bool) -> bytes:
             page.wait_for_load_state("networkidle", timeout=4_000)
         except Exception:
             pass
-        page.wait_for_timeout(1_500)
+        page.wait_for_timeout(700)
         page.evaluate(HIDE_COOKIE_AND_FIXED_JS)
         page.wait_for_timeout(300)
         log("страница готова")
