@@ -33,7 +33,7 @@ const WELCOME =
   `Нажми ${BTN_SHOT}, пришлю график и таблицу цен\n\n` +
   "Картинка приходит примерно через 10 секунд";
 
-const COOLDOWN_MS = 30_000; // не чаще раза в 30 секунд на человека
+const COOLDOWN_MS = 10_000; // не чаще раза в 10 секунд на человека
 const lastRequest = new Map();
 
 export default {
@@ -67,7 +67,7 @@ export default {
       const prev = lastRequest.get(chatId) || 0;
       if (now - prev < COOLDOWN_MS) {
         const wait = Math.ceil((COOLDOWN_MS - (now - prev)) / 1000);
-        await sendMessage(env, chatId, `Скриншот уже готовится. Повторить можно через ${wait} с.`);
+        await sendMessage(env, chatId, `Следующий скриншот можно сделать через ${wait} с.`);
         return new Response("ok");
       }
       lastRequest.set(chatId, now);
@@ -116,6 +116,8 @@ async function takeScreenshot(env) {
   try {
     const page = await browser.newPage();
     await page.setViewport(VIEWPORT);
+    await page.emulateTimezone("Europe/Moscow");
+    await page.setExtraHTTPHeaders({ "Accept-Language": "ru-RU,ru;q=0.9" });
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const url = req.url();
