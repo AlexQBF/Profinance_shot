@@ -38,6 +38,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ github.event.client_payload.chat_id || secrets.TELEGRAM_CHAT_ID }}
           MODE: ${{ github.event.action || github.event.inputs.mode || 'shot' }}
+          WAIT_MSG_ID: ${{ github.event.client_payload.wait_message_id }}
           PAGE_URL: ${{ vars.PAGE_URL }}
           VIEWPORT: ${{ vars.VIEWPORT }}
         run: python shot.py
