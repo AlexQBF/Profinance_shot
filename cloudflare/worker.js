@@ -1,18 +1,23 @@
+/**
+ * Cloudflare Worker — «звонок» из Telegram в GitHub Actions.
+ * Показывает кнопки, по нажатию запускает workflow скриншота в GitHub.
+ *
+ * Переменные: TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, WEBHOOK_SECRET (секреты),
+ * GITHUB_REPO, ALLOWED_CHAT_IDS (пусто = бот доступен всем) — в wrangler.toml.
+ */
+
 const BTN_SHOT = "📸 Скриншот";
-const BTN_FULL = "📄 Вся страница";
-const BTN_HELP = "❓ Помощь";
 
 const KEYBOARD = {
-  keyboard: [[{ text: BTN_SHOT }], [{ text: BTN_FULL }, { text: BTN_HELP }]],
+  keyboard: [[{ text: BTN_SHOT }]],
   resize_keyboard: true,
   is_persistent: true,
 };
 
 const WELCOME =
-  "Привет! Я присылаю скриншот страницы золота с profinance.ru.\n\n" +
-  `${BTN_SHOT} — график и таблица цен\n` +
-  `${BTN_FULL} — вся страница целиком (файлом)\n\n` +
-  "Картинка приходит примерно через минуту.";
+  "Привет! Я присылаю скриншот страницы золота с profinance.ru\n\n" +
+  `Нажми ${BTN_SHOT}, пришлю график и таблицу цен\n\n` +
+  "Картинка приходит примерно через 30-40 секунд";
 
 const COOLDOWN_MS = 60_000; // не чаще раза в минуту на человека
 const lastRequest = new Map();
@@ -48,11 +53,7 @@ export default {
     const text = msg.text.trim();
     const command = text.split(/\s+/)[0].split("@")[0].toLowerCase();
 
-    let mode = null;
-    if (text === BTN_SHOT || command === "/shot") mode = "shot";
-    else if (text === BTN_FULL || command === "/full") mode = "full";
-
-    if (mode) {
+    if (text === BTN_SHOT || command === "/shot") {
       const now = Date.now();
       const prev = lastRequest.get(chatId) || 0;
       if (now - prev < COOLDOWN_MS) {
@@ -70,17 +71,18 @@ export default {
           "X-GitHub-Api-Version": "2022-11-28",
           "User-Agent": "profinance-shot-worker",
         },
-        body: JSON.stringify({ event_type: mode, client_payload: { chat_id: chatId } }),
+        body: JSON.stringify({ event_type: "shot", client_payload: { chat_id: chatId } }),
       });
 
       if (res.ok) {
-        await sendMessage(env, chatId, "⏳ Делаю скриншот, пришлю примерно через минуту…");
+        await sendMessage(env, chatId, "⏳ Делаю скриншот, пришлю примерно через 30-40 секунд…");
       } else {
         lastRequest.delete(chatId);
         console.log("GitHub dispatch failed", res.status, await res.text());
         await sendMessage(env, chatId, "Не получилось запустить скриншот, попробуйте позже.");
       }
     } else {
+      // /start и любой другой текст — приветствие с кнопкой
       await sendMessage(env, chatId, WELCOME);
     }
 
