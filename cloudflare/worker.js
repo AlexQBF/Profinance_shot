@@ -1,13 +1,7 @@
 /**
  * Telegram-бот: скриншот https://www.profinance.ru/gold/ по кнопке.
- *
- * Быстрый путь: браузер Cloudflare (Browser Rendering) прямо внутри Worker'а, 5–10 с.
- * Запасной путь: если браузер Cloudflare недоступен или кончился дневной лимит
- * бесплатного тарифа — запускаем старую схему через GitHub Actions (20–30 с).
- *
- * Переменные: TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, WEBHOOK_SECRET (секреты),
- * GITHUB_REPO, ALLOWED_CHAT_IDS (пусто = доступно всем) — в wrangler.toml.
- * Привязка браузера: BROWSER (в wrangler.toml).
+ * Быстрый путь: браузер Cloudflare (Browser Rendering), 5–10 с.
+ * Запасной путь: GitHub Actions (20–30 с).
  */
 
 import puppeteer from "@cloudflare/puppeteer";
@@ -33,7 +27,7 @@ const WELCOME =
   `Нажми ${BTN_SHOT}, пришлю график и таблицу цен\n\n` +
   "Картинка приходит примерно через 10 секунд";
 
-const COOLDOWN_MS = 10_000; // не чаще раза в 10 секунд на человека
+const COOLDOWN_MS = 20_000; // не чаще раза в 20 секунд на человека
 const lastRequest = new Map();
 
 export default {
@@ -90,7 +84,7 @@ async function makeAndSend(env, chatId, waitId) {
     image = await takeScreenshot(env);
   } catch (e) {
     console.log("Cloudflare browser failed, fallback to GitHub:", String(e));
-    await fallbackToGitHub(env, chatId, waitId);
+    await fallbackToGitHub(env, chatId, waitId, String(e).slice(0, 200));
     return;
   }
 
@@ -116,8 +110,9 @@ async function takeScreenshot(env) {
   try {
     const page = await browser.newPage();
     await page.setViewport(VIEWPORT);
-    await page.emulateTimezone("Europe/Moscow");
-    await page.setExtraHTTPHeaders({ "Accept-Language": "ru-RU,ru;q=0.9" });
+    // московское время и русский язык на странице (если не получится — не страшно)
+    try { await page.emulateTimezone("Europe/Moscow"); } catch (e) { console.log("tz:", String(e)); }
+    try { await page.setExtraHTTPHeaders({ "Accept-Language": "ru-RU,ru;q=0.9" }); } catch (e) {}
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const url = req.url();
@@ -126,7 +121,6 @@ async function takeScreenshot(env) {
     });
 
     await page.goto(PAGE_URL, { waitUntil: "domcontentloaded", timeout: 20_000 });
-    // ждём таблицу цен, потом немного — чтобы дорисовался график
     await page
       .waitForFunction(() => document.body && document.body.innerText.includes("Palladium"), { timeout: 10_000 })
       .catch(() => {});
@@ -210,8 +204,10 @@ function findClip(endMarkers) {
 
 // --- запасной путь через GitHub ---
 
-async function fallbackToGitHub(env, chatId, waitId) {
-  if (waitId) await editMessage(env, chatId, waitId, "⏳ Делаю скриншот, это займёт секунд 20–30…");
+async function fallbackToGitHub(env, chatId, waitId, reason) {
+  // DEBUG: причину показываем прямо в сообщении — потом эту часть можно убрать
+  const note = reason ? `\n\n(быстрый способ не сработал: ${reason})` : "";
+  if (waitId) await editMessage(env, chatId, waitId, "⏳ Делаю скриншот, это займёт секунд 20–30…" + note);
   const res = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, {
     method: "POST",
     headers: {
