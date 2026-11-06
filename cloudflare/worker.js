@@ -1,7 +1,13 @@
 /**
  * Telegram-бот: скриншот https://www.profinance.ru/gold/ по кнопке.
- * Быстрый путь: браузер Cloudflare (Browser Rendering), 5–10 с.
- * Запасной путь: GitHub Actions (20–30 с).
+ *
+ * Быстрый путь: браузер Cloudflare (Browser Rendering) прямо внутри Worker'а, 5–10 с.
+ * Запасной путь: если браузер Cloudflare недоступен или кончился дневной лимит
+ * бесплатного тарифа — запускаем старую схему через GitHub Actions (20–30 с).
+ *
+ * Переменные: TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, WEBHOOK_SECRET (секреты),
+ * GITHUB_REPO, ALLOWED_CHAT_IDS (пусто = доступно всем) — в wrangler.toml.
+ * Привязка браузера: BROWSER (в wrangler.toml).
  */
 
 import puppeteer from "@cloudflare/puppeteer";
@@ -27,7 +33,7 @@ const WELCOME =
   `Нажми ${BTN_SHOT}, пришлю график и таблицу цен\n\n` +
   "Картинка приходит примерно через 10 секунд";
 
-const COOLDOWN_MS = 20_000; // не чаще раза в 20 секунд на человека
+const COOLDOWN_MS = 10_000; // не чаще раза в 10 секунд на человека
 const lastRequest = new Map();
 
 export default {
@@ -105,11 +111,48 @@ async function makeAndSend(env, chatId, waitId) {
   if (waitId) await deleteMessage(env, chatId, waitId);
 }
 
+// Бесплатный Cloudflare даёт запускать новый браузер примерно раз в 20 секунд.
+// Если упёрлись в лимит — ждём и пробуем снова, а не уходим сразу на GitHub.
+async function launchBrowser(env) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await puppeteer.launch(env.BROWSER);
+    } catch (e) {
+      const msg = String(e);
+      const limited = /429|rate limit|too many/i.test(msg);
+      if (!limited || attempt >= 4) throw e;
+      console.log(`launch limited, retry ${attempt}:`, msg);
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+}
+
+// Время на странице — по Москве и в 24-часовом формате, как у пользователя в браузере
+function forceMoscowTime() {
+  const TZ = "Europe/Moscow", LOC = "ru-RU";
+  const wrap = (fn) => function (locales, options) {
+    return fn.call(this, LOC, Object.assign({}, options || {}, { timeZone: TZ }));
+  };
+  Date.prototype.toLocaleString = wrap(Date.prototype.toLocaleString);
+  Date.prototype.toLocaleTimeString = wrap(Date.prototype.toLocaleTimeString);
+  Date.prototype.toLocaleDateString = wrap(Date.prototype.toLocaleDateString);
+  const DTF = Intl.DateTimeFormat;
+  const Patched = function (locales, options) {
+    return new DTF(LOC, Object.assign({}, options || {}, { timeZone: TZ }));
+  };
+  Patched.prototype = DTF.prototype;
+  Patched.supportedLocalesOf = DTF.supportedLocalesOf;
+  Intl.DateTimeFormat = Patched;
+  Object.defineProperty(navigator, "language", { get: () => LOC });
+  Object.defineProperty(navigator, "languages", { get: () => [LOC, "ru"] });
+}
+
 async function takeScreenshot(env) {
-  const browser = await puppeteer.launch(env.BROWSER);
+  const browser = await launchBrowser(env);
   try {
     const page = await browser.newPage();
     await page.setViewport(VIEWPORT);
+    await page.evaluateOnNewDocument(forceMoscowTime);
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const url = req.url();
@@ -118,6 +161,7 @@ async function takeScreenshot(env) {
     });
 
     await page.goto(PAGE_URL, { waitUntil: "domcontentloaded", timeout: 20_000 });
+    // ждём таблицу цен, потом немного — чтобы дорисовался график
     await page
       .waitForFunction(() => document.body && document.body.innerText.includes("Palladium"), { timeout: 10_000 })
       .catch(() => {});
