@@ -17,7 +17,7 @@ const KEYBOARD = {
 const WELCOME =
   "Привет! Я присылаю скриншот страницы золота с profinance.ru\n\n" +
   `Нажми ${BTN_SHOT}, пришлю график и таблицу цен\n\n` +
-  "Картинка приходит примерно через 30-40 секунд";
+  "Картинка приходит примерно через 20-30 секунд";
 
 const COOLDOWN_MS = 60_000; // не чаще раза в минуту на человека
 const lastRequest = new Map();
@@ -75,7 +75,7 @@ export default {
       });
 
       if (res.ok) {
-        await sendMessage(env, chatId, "⏳ Делаю скриншот, пришлю примерно через 30-40 секунд…");
+        await sendMessage(env, chatId, "⏳ Делаю скриншот, пришлю примерно через 20-30 секунд…");
       } else {
         lastRequest.delete(chatId);
         console.log("GitHub dispatch failed", res.status, await res.text());
