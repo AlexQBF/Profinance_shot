@@ -27,6 +27,63 @@ VW, VH = (int(v) for v in (os.environ.get("VIEWPORT") or "1440x900").lower().spl
 API = f"https://api.telegram.org/bot{TOKEN}"
 
 
+COOKIE_WORDS = ("cookie", "куки", "файлы cookie", "персональных данных")
+ACCEPT_TEXTS = (
+    "Принять", "Принимаю", "Согласен", "Согласна", "Согласиться", "Я согласен",
+    "Хорошо", "Понятно", "Ок", "OK", "Accept", "Accept all", "Got it", "Закрыть",
+)
+
+
+def close_cookie_banner(page) -> None:
+    """Соглашается с cookie-баннером, а если не вышло — прячет его."""
+    # 1. Нажать кнопку согласия рядом с текстом про cookie
+    for frame in page.frames:
+        for text in ACCEPT_TEXTS:
+            try:
+                btn = frame.get_by_role("button", name=text, exact=True)
+                if btn.count() == 0:
+                    btn = frame.locator(
+                        f"a:text-is('{text}'), div:text-is('{text}'), span:text-is('{text}')"
+                    )
+                for i in range(btn.count()):
+                    el = btn.nth(i)
+                    if not el.is_visible():
+                        continue
+                    # кнопка должна быть в блоке, где говорится про cookie
+                    near = el.evaluate(
+                        """(el) => {
+                            let n = el;
+                            for (let k = 0; k < 6 && n; k++, n = n.parentElement) {
+                                const t = (n.innerText || '').toLowerCase();
+                                if (t.includes('cookie') || t.includes('куки')) return true;
+                            }
+                            return false;
+                        }"""
+                    )
+                    if near:
+                        el.click(timeout=3_000)
+                        page.wait_for_timeout(700)
+                        return
+            except Exception:
+                continue
+
+    # 2. Запасной вариант: спрятать закреплённые блоки, где упоминаются cookie
+    page.evaluate(
+        """(words) => {
+            for (const el of document.querySelectorAll('body *')) {
+                const st = getComputedStyle(el);
+                if (st.position !== 'fixed' && st.position !== 'sticky') continue;
+                const t = (el.innerText || '').toLowerCase();
+                if (t.length < 2000 && words.some(w => t.includes(w))) {
+                    el.style.setProperty('display', 'none', 'important');
+                }
+            }
+        }""",
+        list(COOKIE_WORDS),
+    )
+    page.wait_for_timeout(300)
+
+
 def take_screenshot(full_page: bool) -> bytes:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -46,6 +103,7 @@ def take_screenshot(full_page: bool) -> bytes:
         except Exception:
             pass  # страница с живыми котировками может не «успокоиться» — это нормально
         page.wait_for_timeout(3_000)
+        close_cookie_banner(page)
         png = page.screenshot(full_page=full_page, type="png")
         browser.close()
         return png
